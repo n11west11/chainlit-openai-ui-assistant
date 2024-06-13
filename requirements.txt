@@ -1,2 +1,10 @@
 openai
 chainlit
+langchain
+langchain-community 
+langchain-openai
+beautifulsoup4
+faiss-cpu
+playwright
+tiktoken
+pytest

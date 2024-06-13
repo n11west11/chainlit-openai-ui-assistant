@@ -1,0 +1,34 @@
+{
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Launch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },        
+        {
+            "name": "Agent UI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "chainlit",
+            "console": "integratedTerminal",
+            "args": ["run", "app.py", "-w", "-d"],
+            "cwd": "${workspaceFolder}"  , 
+            "justMyCode": false     
+        }, 
+    ]
+}
