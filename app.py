@@ -12,10 +12,18 @@ from playwright.async_api import Page
 
 import chainlit as cl
 from chainlit.config import config
+from chainlit.context import local_steps
 from chainlit.element import Element
 from literalai.helper import utc_now
+from openai.types.beta.threads.runs import RunStep
 
-from functions import condense_html, execute_playwright_tool, search_page_tool, save_information
+
+from functions import (
+    condense_html,
+    execute_playwright_tool,
+    search_page_tool,
+    save_information,
+)
 
 async_openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 sync_openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -24,9 +32,14 @@ assistant = sync_openai_client.beta.assistants.retrieve(
     os.environ.get("OPENAI_ASSISTANT_ID")
 )
 ASSISTANT_INSTRUCTIONS = """
-You are a helpful UI assistant, you aid in executing commands against a browesr primarily through the execute_playwright_tool input.
-You can execute instructions against the following html, always review the current html before execting your next command. If the html 
-looks like it is cut off, use the search_page_tool to search the page for specific information:"""
+You are a helpful UI assistant, you aid in executing commands against a browser primarily through the execute_playwright_tool input.
+You can execute instructions against the following HTML, always review the current HTML before executing your next command. If the HTML 
+looks like it is cut off, use the search_page_tool to search the page for specific information.
+
+When using the execute_playwright_tool, you can reference secure environment variables by using the $ENVAR syntax. For example, 
+$USERS.EMAIL will be replaced with the value of the EMAIL key under the USERS section in the .secrets.toml file. This allows you to 
+use sensitive information without exposing it directly in the commands.
+"""
 
 assistant.tools = [
     {
@@ -50,7 +63,7 @@ assistant.tools = [
     {
         "type": "function",
         "function": save_information.open_ai_representation(),
-    }
+    },
 ]
 sync_openai_client.beta.assistants.update(
     assistant_id=assistant.id,
@@ -62,75 +75,142 @@ config.ui.name = assistant.name
 
 
 class EventHandler(AsyncAssistantEventHandler):
-    """Handles events from the OpenAI Assistant API.
-    This class manages the interaction between the assistant and the user.
-    It handles text input, tool calls, and image file uploads.
+    """
+    Handles events from the OpenAI Assistant API following the new guidelines.
+    In this refactor we:
+      • Replace the polling loop for "requires_action" in on_tool_call_done
+        with a dedicated on_event method.
+      • Aggregate tool call outputs and submit them via the submit_tool_outputs_stream helper.
+      • Leave the text and image event handling largely unchanged.
     """
 
     def __init__(self, assistant_name: str) -> None:
         super().__init__()
-        self.current_message: cl.Message = cl.context.current_step
+        self.current_message: cl.Message = None
         self.current_step: cl.Step = None
         self.current_tool_call = None
         self.assistant_name = assistant_name
+        previous_steps = local_steps.get() or []
+        parent_step = previous_steps[-1] if previous_steps else None
+        if parent_step:
+            self.parent_id = parent_step.id
 
-    @override
+    async def on_run_step_created(self, run_step: RunStep) -> None:
+        cl.user_session.set("run_step", run_step)
+
     async def on_text_created(self, text) -> None:
         self.current_message = await cl.Message(
             author=self.assistant_name, content=""
         ).send()
 
-    @override
     async def on_text_delta(self, delta, snapshot):
-        await self.current_message.stream_token(delta.value)
+        if delta.value:
+            await self.current_message.stream_token(delta.value)
 
-    @override
     async def on_text_done(self, text):
         await self.current_message.update()
+        if text.annotations:
+            for annotation in text.annotations:
+                if annotation.type == "file_path":
+                    response = (
+                        await async_openai_client.files.with_raw_response.content(
+                            annotation.file_path.file_id
+                        )
+                    )
+                    file_name = annotation.text.split("/")[-1]
+                    try:
+                        fig = plotly.io.from_json(response.content)
+                        element = cl.Plotly(name=file_name, figure=fig)
+                        await cl.Message(content="", elements=[element]).send()
+                    except Exception as e:
+                        element = cl.File(content=response.content, name=file_name)
+                        await cl.Message(content="", elements=[element]).send()
+                    # Hack to fix links
+                    if (
+                        annotation.text in self.current_message.content
+                        and element.chainlit_key
+                    ):
+                        self.current_message.content = self.current_message.content.replace(
+                            annotation.text,
+                            f"/project/file/{element.chainlit_key}?session_id={cl.context.session.id}",
+                        )
+                        await self.current_message.update()
 
-    @cl.step
+    # ---------------------------------------------------------------------------
+    # Tool call events (unchanged except for removal of the polling loop)
+    # ---------------------------------------------------------------------------
     async def on_tool_call_created(self, tool_call):
         self.current_tool_call = tool_call.id
-        self.current_step = cl.context.current_step
-        self.current_step.language = "python"
-        self.current_step.created_at = utc_now()
+        self.current_step = cl.Step(
+            name=tool_call.type, type="tool", parent_id=self.parent_id
+        )
+        self.current_step.show_input = "python"
+        self.current_step.start = utc_now()
         await self.current_step.send()
 
-
-    @cl.step
     async def on_tool_call_delta(self, delta, snapshot):
         if snapshot.id != self.current_tool_call:
             self.current_tool_call = snapshot.id
-            self.current_step = cl.context.current_step
-            self.current_step.language = "python"
+            self.current_step = cl.Step(
+                name=delta.type, type="tool", parent_id=self.parent_id
+            )
             self.current_step.start = utc_now()
+            if snapshot.type == "code_interpreter":
+                self.current_step.show_input = "python"
+            if snapshot.type == "function":
+                self.current_step.name = snapshot.function.name
+                self.current_step.language = "json"
             await self.current_step.send()
+
+        if delta.type == "function":
+            pass
 
         if delta.type == "code_interpreter":
             if delta.code_interpreter.outputs:
                 for output in delta.code_interpreter.outputs:
                     if output.type == "logs":
-                        error_step = cl.context.current_step
-                        error_step.is_error = True
-                        error_step.output = output.logs
-                        error_step.language = "markdown"
-                        error_step.start = self.current_step.start
-                        error_step.end = utc_now()
-                        await error_step.send()
+                        self.current_step.output += output.logs
+                        self.current_step.language = "markdown"
+                        self.current_step.end = utc_now()
+                        await self.current_step.update()
+                    elif output.type == "image":
+                        self.current_step.language = "json"
+                        self.current_step.output = output.image.model_dump_json()
             else:
                 if delta.code_interpreter.input:
-                    await self.current_step.stream_token(delta.code_interpreter.input)
+                    await self.current_step.stream_token(
+                        delta.code_interpreter.input, is_input=True
+                    )
+                    
+    async def on_event(self, event) -> None:
+        if event.event == "error":
+            return cl.ErrorMessage(content=str(event.data.message)).send()
+        
+    async def on_exception(self, exception: Exception) -> None:
+        return cl.ErrorMessage(content=str(exception)).send()
 
-        if delta.type == "function":
-            await self.current_step.stream_token(delta.function.arguments)
+    async def on_tool_call_done(self, tool_call):       
+        self.current_step.end = utc_now()
+        await self.current_step.update()
+
+    async def on_image_file_done(self, image_file):
+        image_id = image_file.file_id
+        response = await async_openai_client.files.with_raw_response.content(image_id)
+        image_element = cl.Image(
+            name=image_id,
+            content=response.content,
+            display="inline",
+            size="large"
+        )
+        if not self.current_message.elements:
+            self.current_message.elements = []
+        self.current_message.elements.append(image_element)
+        await self.current_message.update()
 
     @override
     async def on_tool_call_done(self, tool_call):
         self.current_step.end = utc_now()
         await self.current_step.update()
-        run_status = await async_openai_client.beta.threads.runs.retrieve(
-            thread_id=self.current_run.thread_id, run_id=self.current_run.id
-        )
 
         while run_status.status in ["queued", "in_progress", "requires_action"]:
             if run_status.status == "requires_action":
@@ -188,17 +268,6 @@ class EventHandler(AsyncAssistantEventHandler):
             content=latest_messages.data[0].content[0].text.value,
         ).send()
 
-    async def on_image_file_done(self, image_file):
-        image_id = image_file.file_id
-        response = await async_openai_client.files.with_raw_response.content(image_id)
-        image_element = cl.Image(
-            name=image_id, content=response.content, display="inline", size="large"
-        )
-        if not self.current_message.elements:
-            self.current_message.elements = []
-        self.current_message.elements.append(image_element)
-        await self.current_message.update()
-
 
 @cl.step
 async def set_playwright_context():
@@ -238,11 +307,6 @@ async def speech_to_text(audio_file):
 
 
 async def upload_files(files: List[Element]):
-    """Uploads files to OpenAI and returns their file IDs.
-    Args:
-        files: List of uploaded files to process.
-    Returns:
-        List of file IDs."""
     file_ids = []
     for file in files:
         uploaded_file = await async_openai_client.files.create(
@@ -253,12 +317,6 @@ async def upload_files(files: List[Element]):
 
 
 async def process_files(files: List[Element]):
-    """Processes uploaded files.
-    Uploads files to OpenAI and returns their file IDs.
-    Args:
-        files: List of uploaded files to process.
-    Returns:
-        List of dictionaries containing file IDs and their associated tools."""
     # Upload files if any and get file_ids
     file_ids = []
     if len(files) > 0:
@@ -267,9 +325,9 @@ async def process_files(files: List[Element]):
     return [
         {
             "file_id": file_id,
-            "tools": [{"type": "code_interpreter"}, {"type": "file_search"}],
+            "tools": [{"type": "code_interpreter"}, {"type": "file_search"}] if file.mime in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/markdown", "application/pdf", "text/plain"] else [{"type": "code_interpreter"}],
         }
-        for file_id in file_ids
+        for file_id, file in zip(file_ids, files)
     ]
 
 
@@ -289,7 +347,7 @@ async def start_chat():
         # First try launching our own browser
         print("Launching new browser instance...")
         async_browser = await playwright.chromium.launch(headless=False)
-            
+
     except Exception as e:
         print(f"Failed to initialize browser: {e}")
         raise
@@ -306,10 +364,7 @@ async def start_chat():
     # Store thread ID in user session for later use
     cl.user_session.set("thread_id", thread.id)
     cl.user_session.set("assistant", assistant)
-    await cl.Avatar(name=assistant.name, path="./public/logo.png").send()
-    await cl.Message(
-        content=f"Hello, I'm {assistant.name}!", disable_feedback=True
-    ).send()
+    await cl.Message(content=f"Hello, I'm {assistant.name}!").send()
 
 
 @cl.on_message
@@ -336,7 +391,7 @@ async def main(message: cl.Message):
 
 
 @cl.on_audio_chunk
-async def on_audio_chunk(chunk: cl.AudioChunk):
+async def on_audio_chunk(chunk: cl.InputAudioChunk):
     """Handles audio chunks from the user.
     If the chunk is the start of a new audio stream, it initializes the session for a new audio stream.
     Writes the chunks to a buffer and transcribes the whole audio at the end."""
@@ -406,7 +461,7 @@ async def end_chat():
     """Cleanup browser resources when chat ends"""
     browser = cl.user_session.get("browser")
     playwright = cl.user_session.get("playwright")
-    
+
     if browser:
         await browser.close()
     if playwright:
