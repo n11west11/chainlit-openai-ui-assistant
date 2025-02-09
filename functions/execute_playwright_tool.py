@@ -10,6 +10,8 @@ from httpx import get
 from openai import BaseModel
 from playwright.async_api import Page
 from langchain.tools import tool
+import re
+from config import settings
 
 
 class PlaywrightCommand(str, Enum):
@@ -38,8 +40,18 @@ class PlaywrightCommand(str, Enum):
     PRESS = "press"
 
 
+def parse_input(value: str) -> str:
+    """
+    Parses the input string for $ symbols and replaces them with values from settings.
+    """
+    pattern = re.compile(r'\$([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)')
+    matches = pattern.findall(value)
+    for match in matches:
+        replacement = getattr(settings, match)
+        value = value.replace(f'${match}', replacement)
+    return value
 
-@cl.step(type="tool")
+
 async def execute_playwright_tool(
     playwright_command: PlaywrightCommand,
     locators: List[str] = None,
@@ -61,6 +73,12 @@ async def execute_playwright_tool(
             element = page.locator(locator)
         else:
             element = element.locator(locator)
+    if value:
+        value = parse_input(value)
+    if url:
+        url = parse_input(url)
+    if key:
+        key = parse_input(key)
     if playwright_command == PlaywrightCommand.GO_TO:
         result = await page.goto(url)
         return result.url
@@ -162,7 +180,9 @@ def open_ai_representation() -> dict:
     """
     return {
         "name": "execute_playwright_tool",
-        "description": "Executes a playwright command against a page and returns the result.",
+        "description": "Executes a playwright command against a page and returns the result. "
+                       "You can use environment variables in all parameters by prefixing them with a $ symbol."
+                       "(i.e. $USER.EMAIL).",
         "strict": True,
         "parameters": {
             "type": "object",
