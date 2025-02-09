@@ -38,140 +38,193 @@ class PlaywrightCommand(str, Enum):
     PRESS = "press"
 
 
-class ExecutePlaywrightInput(BaseModel):
-    """
-    Input model for the execute_playwright_tool function.
-    """
-
-    playwright_command: PlaywrightCommand
-    locators: List[str] = []
-    attribute: str = None
-    value: str = None
-    url: str = None
-    key: str = None
-
 
 @cl.step(type="tool")
-async def execute_playwright_tool(input_: ExecutePlaywrightInput):
+async def execute_playwright_tool(
+    playwright_command: PlaywrightCommand,
+    locators: List[str] = None,
+    attribute: str = None,
+    value: str = None,
+    url: str = None,
+    key: str = None):
+
     """
     Executes a playwright command against a page and returns the result.
     If multiple locators are provided, we will assume that the order of the locators details a parent-child relationship.
     We will locate each subsequent element within the previously located element.
     """
     page = cl.user_session.get("page")  # type: Page
-    # if locators doesn't exist, just make it empty
-    if not input_.locators:
-        input_.locators = []
+    locators = locators or []  # Initialize empty list if None
     element = None
-    for locator in input_.locators:
+    for locator in locators:
         if element is None:
             element = page.locator(locator)
         else:
             element = element.locator(locator)
-    if input_.playwright_command == PlaywrightCommand.GO_TO:
-        result = await page.goto(input_.url)
+    if playwright_command == PlaywrightCommand.GO_TO:
+        result = await page.goto(url)
         return result.url
-    elif input_.playwright_command == PlaywrightCommand.GET_TEXT:
+    elif playwright_command == PlaywrightCommand.GET_TEXT:
         return await element.text()
-    elif input_.playwright_command == PlaywrightCommand.GET_HTML:
+    elif playwright_command == PlaywrightCommand.GET_HTML:
         return await element.inner_html()
-    elif input_.playwright_command == PlaywrightCommand.GET_ATTRIBUTE:
-        return await element.get_attribute(input_.attribute)
-    elif input_.playwright_command == PlaywrightCommand.CLICK:
+    elif playwright_command == PlaywrightCommand.GET_ATTRIBUTE:
+        return await element.get_attribute(attribute)
+    elif playwright_command == PlaywrightCommand.CLICK:
         try:
             await element.first.click()
             return "Clicked element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.FILL:
+    elif playwright_command == PlaywrightCommand.FILL:
         try:
-            await page.fill(locator, input_.value, strict=False)
+            await page.fill(locator, value, strict=False)
             return "Filled element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.SELECT:
+    elif playwright_command == PlaywrightCommand.SELECT:
         try:
-            await element.first.select_option(input_.value)
+            await element.first.select_option(value)
             return "Selected option."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.HOVER:
+    elif playwright_command == PlaywrightCommand.HOVER:
         try:
             await element.first.hover()
             return "Hovered over element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.SCROLL:
+    elif playwright_command == PlaywrightCommand.SCROLL:
         try:
             await element.first.scroll_into_view_if_needed()
             return "Scrolled to element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.SEND_KEYS:
+    elif playwright_command == PlaywrightCommand.SEND_KEYS:
         try:
-            await element.send_keys(input_.value)
+            await element.send_keys(value)
             return "Sent keys to element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.PRESS:
+    elif playwright_command == PlaywrightCommand.PRESS:
         try:
-            await page.press(element, input_.key)
+            await page.press(element, key)
             return "Pressed key."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR:
         try:
-            await page.wait_for_timeout(input_.value)
+            await page.wait_for_timeout(value)
             return "Waited for element."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_SELECTOR:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_SELECTOR:
         try:
             await page.wait_for_selector(locator)
             return "Waited for selector."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_TIMEOUT:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_TIMEOUT:
         try:
-            await page.wait_for_timeout(input_.value)
+            await page.wait_for_timeout(value)
             return "Waited for timeout."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_NAVIGATION:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_NAVIGATION:
         try:
             await page.wait_for_navigation()
             return "Waited for navigation."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_REQUEST:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_REQUEST:
         try:
-            await page.wait_for_request(input_.value)
+            await page.wait_for_request(value)
             return "Waited for request."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_RESPONSE:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_RESPONSE:
         try:
-            await page.wait_for_response(input_.value)
+            await page.wait_for_response(value)
             return "Waited for response."
         except Exception as e:
             return str(e)
-    elif input_.playwright_command == PlaywrightCommand.WAIT_FOR_LOAD_STATE:
+    elif playwright_command == PlaywrightCommand.WAIT_FOR_LOAD_STATE:
         try:
             await page.wait_for_load_state()
             return "Waited for load state."
         except Exception as e:
             return str(e)
-        
 
 
-if __name__ == "__main__":
-    import json
-    # Print the format that OpenAI expects
-    schema = {
-            "name": "execute_playwright_tool",
-            "description": "Executes a playwright command against a page and returns the result.",
-            "parameters": ExecutePlaywrightInput.model_json_schema(),
-        }
-    #print with double quotes
-    with open("schema.json", "w") as f:
-        f.write(json.dumps(schema, indent=4))
+def open_ai_representation() -> dict:
+    """
+    Returns a dictionary representation of the function that can be used in an OpenAI assistant.
+    """
+    return {
+        "name": "execute_playwright_tool",
+        "description": "Executes a playwright command against a page and returns the result.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "required": [
+                "playwright_command",
+                "locators",
+                "attribute",
+                "value",
+                "url",
+                "key",
+            ],
+            "properties": {
+                "playwright_command": {
+                    "type": "string",
+                    "description": "Command to execute using Playwright.",
+                    "enum": [
+                        "go_to",
+                        "get_text",
+                        "get_html",
+                        "get_attribute",
+                        "click",
+                        "fill",
+                        "select",
+                        "hover",
+                        "scroll",
+                        "wait_for",
+                        "wait_for_selector",
+                        "wait_for_timeout",
+                        "wait_for_navigation",
+                        "wait_for_request",
+                        "wait_for_response",
+                        "wait_for_load_state",
+                        "wait_for_selector_timeout",
+                        "send_keys",
+                        "press",
+                    ],
+                },
+                "locators": {
+                    "type": "array",
+                    "description": "List of locators to identify elements on the page.",
+                    "items": {
+                        "type": "string",
+                        "description": "A locator string for an element on the page.",
+                    },
+                },
+                "attribute": {
+                    "type": "string",
+                    "description": "The attribute to retrieve from an element, applicable for GET_ATTRIBUTE command.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value to use with commands like FILL and SELECT.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "The URL to navigate to, used with the GO_TO command.",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "The key to press on the element, used with the PRESS command.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    }

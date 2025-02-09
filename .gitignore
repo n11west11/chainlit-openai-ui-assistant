@@ -167,3 +167,9 @@ cython_debug/
 #.idea/
 
 cache
+# Ignore dynaconf secret files
+.secrets.*
+
+# OpenAI Memories
+memories/
+.memories/
