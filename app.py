@@ -172,12 +172,10 @@ class EventHandler(AsyncAssistantEventHandler):
                         if not result:
                             result = "success"
                     elif function.name == "search_page_tool":
-                        await screenshot()
                         result = await search_page_tool.search_page_tool(**arguments)
                     elif function.name == "save_information":
                         result = await save_information.save_information(**arguments)
                     elif function.name == "condense_html":
-                        await screenshot()
                         result = await condense_html.condense_html(**arguments)
                     await async_openai_client.beta.threads.runs.submit_tool_outputs(
                         thread_id=self.current_event.data.thread_id,

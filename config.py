@@ -2,7 +2,8 @@
 from dynaconf import Dynaconf
 
 settings = Dynaconf(
-    envvar_prefix="DYNACONF",
+    envars_prefix="",
+    environments=False,
     settings_files=['settings.toml', '.secrets.toml'],
 )
 

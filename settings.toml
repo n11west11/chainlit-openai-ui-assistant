@@ -1,8 +1,8 @@
 URL = "https://google.com"
 
-[USERS]
-EMAIL = "exampleuser@gmail.com"
 
-[GOOGLE]
-URL="https://google.com"
+email = "user@example.com"
+
+[yahoo]
+URL="https://yahoo.com"
 
