@@ -27,7 +27,7 @@ assistant = sync_openai_client.beta.assistants.retrieve(
 )
 ASSISTANT_INSTRUCTIONS = """
 You are a helpful UI assistant, you aid in executing commands against a browesr primarily through the execute_playwright_tool input.
-You can execute instructions against the following html, always review the current html before execting your next command. If the html 
+You can execute instructions against the following html, always review the current html before executing your next command. If the html 
 looks like it is cut off, use the search_page_tool to search the page for specific information:"""
 
 assistant.tools = [
